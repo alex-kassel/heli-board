@@ -14,3 +14,6 @@ Status: open. Do not commit keys or implement insecure APK-embedded shared crede
 
 ## D-005 — Clipboard retention
 Status: proposed. Target 20 recent items plus pinned, after inspection of current implementation.
+
+## D-006 — Microphone button placement
+Status: accepted. Place the microphone button on the far right (top-right) of the keyboard toolbar, aligned with Gboard ergonomics for natural right-hand thumb access.
