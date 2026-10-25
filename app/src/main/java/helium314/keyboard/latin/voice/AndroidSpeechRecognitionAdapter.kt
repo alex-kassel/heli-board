@@ -10,7 +10,7 @@ import android.os.Looper
 import android.speech.RecognitionListener
 import android.speech.RecognizerIntent
 import android.speech.SpeechRecognizer
-import helium314.keyboard.latin.common.Log
+import helium314.keyboard.latin.utils.Log
 
 /**
  * Standard Android implementation of SpeechRecognitionAdapter using android.speech.SpeechRecognizer.

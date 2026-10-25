@@ -235,7 +235,6 @@ class VoiceInputController private constructor() {
 
     fun getWindowToken(latinIme: LatinIME): IBinder? {
         return KeyboardSwitcher.getInstance().mainKeyboardView?.windowToken
-            ?: KeyboardSwitcher.getInstance().keyboard?.mRootWindowToken
             ?: latinIme.window?.window?.decorView?.windowToken
     }
 
