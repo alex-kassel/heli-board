@@ -2,7 +2,7 @@
 package helium314.keyboard
 
 import helium314.keyboard.keyboard.internal.keyboard_parser.floris.KeyCode
-import helium314.keyboard.latin.utils.Separators
+import helium314.keyboard.latin.common.Constants.Separators
 import helium314.keyboard.latin.utils.ToolbarKey
 import helium314.keyboard.latin.utils.defaultPinnedToolbarPref
 import helium314.keyboard.latin.utils.getCodeForToolbarKey
