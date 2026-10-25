@@ -622,6 +622,7 @@ public class LatinIME extends InputMethodService implements
 
     @Override
     public void onDestroy() {
+        VoiceInputController.Companion.getInstance().destroy();
         mClipboardHistoryManager.onDestroy();
         mDictionaryFacilitator.closeDictionaries();
         mSettings.onDestroy();
@@ -968,6 +969,7 @@ public class LatinIME extends InputMethodService implements
     }
 
     private void cleanupInternalStateForFinishInput() {
+        VoiceInputController.Companion.getInstance().cancel();
         // Remove pending messages related to update suggestions
         mHandler.cancelUpdateSuggestionStrip();
         // Should do the following in onFinishInputInternal but until JB MR2 it's not called :(
