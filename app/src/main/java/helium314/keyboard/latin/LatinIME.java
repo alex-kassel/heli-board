@@ -41,6 +41,7 @@ import helium314.keyboard.keyboard.emoji.EmojiSearchActivityKt;
 import helium314.keyboard.keyboard.internal.KeyboardIconsSet;
 import helium314.keyboard.keyboard.internal.keyboard_parser.floris.KeyCode;
 import helium314.keyboard.latin.common.InsetsOutlineProvider;
+import helium314.keyboard.latin.voice.VoiceInputController;
 import helium314.keyboard.event.Event;
 import helium314.keyboard.event.InputTransaction;
 import helium314.keyboard.keyboard.Keyboard;
@@ -1339,7 +1340,17 @@ public class LatinIME extends InputMethodService implements
     // completely replace #onCodeInput.
     public void onEvent(@NonNull final Event event) {
         if (KeyCode.VOICE_INPUT == event.getKeyCode()) {
-            mRichImm.switchToShortcutIme(this);
+            VoiceInputController.Companion.getInstance().toggleVoiceInput(this);
+            return;
+        }
+        if (KeyCode.VOICE_SETTINGS == event.getKeyCode()) {
+            VoiceInputController.Companion.getInstance().showVoiceSettingsDialog(
+                    this,
+                    mKeyboardSwitcher.getMainKeyboardView() != null
+                            ? mKeyboardSwitcher.getMainKeyboardView().getWindowToken()
+                            : null
+            );
+            return;
         }
         InputTransaction completeInputTransaction =
                 mInputLogic.onCodeInput(mSettings.getCurrent(), event, mKeyboardSwitcher.getKeyboardCapsMode(), mHandler);
