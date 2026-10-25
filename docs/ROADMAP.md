@@ -9,3 +9,7 @@
 7. Packaging: CI build and downloadable debug APK; real-device smoke testing.
 
 Each stage should be a small PR with evidence of validation.
+
+## Planned v0.2 — Incoming voice messages
+
+After the initial keyboard MVP is stable, implement audio import, multilingual transcription, full translation, and concise key-point summaries. See [Task 006](tasks/006-incoming-voice-summaries.md). This is not a blocker for v0.1.
