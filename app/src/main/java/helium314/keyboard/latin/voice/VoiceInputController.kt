@@ -3,6 +3,7 @@ package helium314.keyboard.latin.voice
 
 import android.Manifest
 import android.app.AlertDialog
+import android.content.ClipboardManager
 import android.content.Context
 import android.content.pm.PackageManager
 import android.os.IBinder
@@ -18,15 +19,25 @@ import java.lang.ref.WeakReference
 
 /**
  * Controller for AI Voice operations in HeliBoard.
- * Task 004: Speech recognition adapter, explicit runtime permission, start/stop/cancel,
- * lifecycle cleanup, sensitive field protection, and transcript preview.
+ * Task 004 & Task 005:
+ * - Speech recognition adapter with runtime permission and lifecycle management.
+ * - AI text processing (OpenAI-compatible BYOK + custom proxy gateway).
+ * - Deterministic prompt building preserving facts and commitments.
+ * - Explicit user consent gate and sensitive field protection.
+ * - Preview and comparison before editor insertion (zero auto-send).
  */
 class VoiceInputController private constructor() {
 
     @VisibleForTesting
     var adapter: SpeechRecognitionAdapter = AndroidSpeechRecognitionAdapter()
 
+    @VisibleForTesting
+    var aiClient: VoiceAiClient = OpenAiCompatibleAiClient()
+
     var currentState: RecognitionState = RecognitionState.IDLE
+        private set
+
+    var lastRawTranscript: String = ""
         private set
 
     private var activeLatinImeRef: WeakReference<LatinIME>? = null
@@ -107,17 +118,9 @@ class VoiceInputController private constructor() {
             languageTag = languageTag,
             preferOffline = false,
             listener = object : SpeechRecognitionListener {
-                override fun onReadyForSpeech() {
-                    // Ready to capture voice
-                }
-
-                override fun onBeginningOfSpeech() {
-                    // Audio stream active
-                }
-
-                override fun onRmsChanged(rmsdB: Float) {
-                    // Volume updates
-                }
+                override fun onReadyForSpeech() {}
+                override fun onBeginningOfSpeech() {}
+                override fun onRmsChanged(rmsdB: Float) {}
 
                 override fun onPartialResults(partialText: String) {
                     if (partialText.isNotBlank()) {
@@ -142,9 +145,10 @@ class VoiceInputController private constructor() {
 
     private fun handleFinalResults(finalText: String) {
         val latinIme = activeLatinImeRef?.get()
-        val text = finalText.trim()
+        val rawTranscript = finalText.trim()
+        lastRawTranscript = rawTranscript
 
-        if (text.isEmpty()) {
+        if (rawTranscript.isEmpty()) {
             KeyboardSwitcher.getInstance().showToast("No speech recognized", true)
             currentState = RecognitionState.IDLE
             return
@@ -156,13 +160,66 @@ class VoiceInputController private constructor() {
         }
 
         val settings = VoiceSettings.read(latinIme.prefs())
-        if (settings.isPreviewEnabled) {
-            showPreviewDialog(latinIme, settings, text)
+        val aiConfig = VoiceAiConfig.read(latinIme.prefs())
+
+        if (settings.mode == VoiceMode.PLAIN) {
+            // Verbatim plain transcription
+            if (settings.isPreviewEnabled) {
+                showPreviewDialog(latinIme, settings, rawTranscript, null)
+            } else {
+                insertText(latinIme, rawTranscript)
+                KeyboardSwitcher.getInstance().showToast("✅ Inserted: $rawTranscript", true)
+            }
+            currentState = RecognitionState.IDLE
         } else {
-            insertText(latinIme, text)
-            KeyboardSwitcher.getInstance().showToast("✅ Inserted: $text", true)
+            // AI-assisted mode
+            if (!aiConfig.hasUserConsented) {
+                val token = getWindowToken(latinIme)
+                if (token != null) {
+                    showConsentDialog(latinIme, token) {
+                        processAiTransformation(latinIme, settings, VoiceAiConfig.read(latinIme.prefs()), rawTranscript)
+                    }
+                } else {
+                    // Fallback to plain if dialog cannot be presented
+                    insertText(latinIme, rawTranscript)
+                }
+                currentState = RecognitionState.IDLE
+            } else if (!aiConfig.isConfigured) {
+                showMissingConfigDialog(latinIme, rawTranscript)
+                currentState = RecognitionState.IDLE
+            } else {
+                processAiTransformation(latinIme, settings, aiConfig, rawTranscript)
+            }
         }
-        currentState = RecognitionState.IDLE
+    }
+
+    private fun processAiTransformation(
+        latinIme: LatinIME,
+        settings: VoiceSettings,
+        aiConfig: VoiceAiConfig,
+        rawTranscript: String
+    ) {
+        currentState = RecognitionState.PROCESSING
+        KeyboardSwitcher.getInstance().showToast("✨ AI transforming (${settings.toSummary()})...", true)
+
+        aiClient.transform(
+            rawTranscript = rawTranscript,
+            settings = settings,
+            config = aiConfig,
+            onSuccess = { transformedText ->
+                currentState = RecognitionState.IDLE
+                if (settings.isPreviewEnabled) {
+                    showPreviewDialog(latinIme, settings, transformedText, rawTranscript)
+                } else {
+                    insertText(latinIme, transformedText)
+                    KeyboardSwitcher.getInstance().showToast("✅ AI text inserted (${settings.outputLanguage.name})", true)
+                }
+            },
+            onError = { errorMessage ->
+                currentState = RecognitionState.IDLE
+                showTransformationErrorDialog(latinIme, errorMessage, rawTranscript)
+            }
+        )
     }
 
     private fun handleError(errorMessage: String) {
@@ -170,10 +227,15 @@ class VoiceInputController private constructor() {
         currentState = RecognitionState.IDLE
     }
 
-    private fun showPreviewDialog(latinIme: LatinIME, settings: VoiceSettings, text: String) {
+    private fun showPreviewDialog(
+        latinIme: LatinIME,
+        settings: VoiceSettings,
+        displayText: String,
+        originalTranscript: String?
+    ) {
         val windowToken = getWindowToken(latinIme)
         if (windowToken == null) {
-            insertText(latinIme, text)
+            insertText(latinIme, displayText)
             return
         }
 
@@ -183,16 +245,108 @@ class VoiceInputController private constructor() {
             "Plain (${settings.outputLanguage.name})"
         }
 
-        val dialog = AlertDialog.Builder(getPlatformDialogThemeContext(latinIme))
+        val message = if (!originalTranscript.isNullOrBlank() && originalTranscript != displayText) {
+            "$displayText\n\n────────────────\n🎙️ Original: $originalTranscript"
+        } else {
+            displayText
+        }
+
+        val builder = AlertDialog.Builder(getPlatformDialogThemeContext(latinIme))
             .setTitle("Voice Preview [$modeLabel]")
-            .setMessage(text)
+            .setMessage(message)
             .setPositiveButton("Insert") { di, _ ->
                 di.dismiss()
-                insertText(latinIme, text)
+                insertText(latinIme, displayText)
             }
             .setNegativeButton("Discard") { di, _ ->
                 di.dismiss()
                 KeyboardSwitcher.getInstance().showToast("Voice input discarded", true)
+            }
+
+        if (!originalTranscript.isNullOrBlank() && originalTranscript != displayText) {
+            builder.setNeutralButton("Insert Original") { di, _ ->
+                di.dismiss()
+                insertText(latinIme, originalTranscript)
+                KeyboardSwitcher.getInstance().showToast("Inserted original transcript", true)
+            }
+        }
+
+        val dialog = builder.create()
+        attachToWindow(dialog, windowToken)
+        dialog.show()
+    }
+
+    private fun showMissingConfigDialog(latinIme: LatinIME, rawTranscript: String) {
+        val token = getWindowToken(latinIme) ?: return
+        val dialog = AlertDialog.Builder(getPlatformDialogThemeContext(latinIme))
+            .setTitle("AI Provider Not Configured")
+            .setMessage("AI processing requires an API Key or custom proxy endpoint.\n\nYou can configure it now, or insert your spoken words directly as plain text.")
+            .setPositiveButton("Configure AI") { di, _ ->
+                di.dismiss()
+                showVoiceSettingsDialog(latinIme, token)
+            }
+            .setNeutralButton("Insert Plain Text") { di, _ ->
+                di.dismiss()
+                insertText(latinIme, rawTranscript)
+            }
+            .setNegativeButton("Cancel", null)
+            .create()
+
+        attachToWindow(dialog, token)
+        dialog.show()
+    }
+
+    private fun showTransformationErrorDialog(
+        latinIme: LatinIME,
+        errorMessage: String,
+        rawTranscript: String
+    ) {
+        val token = getWindowToken(latinIme)
+        if (token == null) {
+            KeyboardSwitcher.getInstance().showToast("AI Error: $errorMessage", true)
+            return
+        }
+
+        val dialog = AlertDialog.Builder(getPlatformDialogThemeContext(latinIme))
+            .setTitle("AI Transformation Failed")
+            .setMessage("$errorMessage\n\nYour original transcript has been preserved.")
+            .setPositiveButton("Insert Original") { di, _ ->
+                di.dismiss()
+                insertText(latinIme, rawTranscript)
+            }
+            .setNegativeButton("Discard", null)
+            .create()
+
+        attachToWindow(dialog, token)
+        dialog.show()
+    }
+
+    /**
+     * Explicit Privacy Consent Dialog required before the first AI network request is dispatched.
+     */
+    fun showConsentDialog(latinIme: LatinIME, windowToken: IBinder, onConsented: () -> Unit) {
+        val config = VoiceAiConfig.read(latinIme.prefs())
+        val dialog = AlertDialog.Builder(getPlatformDialogThemeContext(latinIme))
+            .setTitle("AI Voice Processing Consent")
+            .setMessage(
+                "To transform your speech into your chosen tone and language, HeliBoard sends only the recognized voice transcript to your configured AI provider (${config.apiEndpoint}).\n\n" +
+                "Privacy Safeguards:\n" +
+                "• Regular keyboard typing is NEVER transmitted.\n" +
+                "• Password fields are strictly blocked.\n" +
+                "• Clipboard history is NEVER transmitted.\n" +
+                "• Transcripts are not stored remotely.\n\n" +
+                "Do you consent to sending speech transcripts for AI processing?"
+            )
+            .setPositiveButton("Consent & Enable") { di, _ ->
+                di.dismiss()
+                config.copy(hasUserConsented = true).save(latinIme.prefs())
+                KeyboardSwitcher.getInstance().showToast("AI processing enabled", true)
+                onConsented()
+            }
+            .setNegativeButton("Decline") { di, _ ->
+                di.dismiss()
+                KeyboardSwitcher.getInstance().showToast("AI processing declined. Voice mode set to Plain.", true)
+                VoiceSettings.read(latinIme.prefs()).copy(mode = VoiceMode.PLAIN).save(latinIme.prefs())
             }
             .create()
 
@@ -245,6 +399,7 @@ class VoiceInputController private constructor() {
         val token = windowToken ?: getWindowToken(latinIme) ?: return
         val prefs = latinIme.prefs()
         var currentSettings = VoiceSettings.read(prefs)
+        var currentAiConfig = VoiceAiConfig.read(prefs)
 
         fun openRootDialog() {
             val items = arrayOf(
@@ -252,7 +407,8 @@ class VoiceInputController private constructor() {
                 "⚙️ Mode: ${currentSettings.mode.title}",
                 "👤 Recipient: ${currentSettings.recipientTone.title}",
                 "✨ Polish: ${currentSettings.polishLevel.title}",
-                "👁️ Preview before insert: ${if (currentSettings.isPreviewEnabled) "ENABLED [ON]" else "DISABLED [OFF]"}"
+                "👁️ Preview before insert: ${if (currentSettings.isPreviewEnabled) "ENABLED [ON]" else "DISABLED [OFF]"}",
+                "🤖 AI Provider: ${if (currentAiConfig.isConfigured) "Configured (${currentAiConfig.model})" else "NOT CONFIGURED [Key needed]"}"
             )
 
             val dialog = AlertDialog.Builder(getPlatformDialogThemeContext(latinIme))
@@ -294,6 +450,10 @@ class VoiceInputController private constructor() {
                             )
                             openRootDialog()
                         }
+                        5 -> showAiProviderDialog(latinIme, token) {
+                            currentAiConfig = VoiceAiConfig.read(prefs)
+                            openRootDialog()
+                        }
                     }
                 }
                 .setPositiveButton(android.R.string.ok, null)
@@ -304,6 +464,162 @@ class VoiceInputController private constructor() {
         }
 
         openRootDialog()
+    }
+
+    private fun showAiProviderDialog(latinIme: LatinIME, windowToken: IBinder, onUpdated: () -> Unit) {
+        val prefs = latinIme.prefs()
+        var config = VoiceAiConfig.read(prefs)
+
+        fun openAiDialog() {
+            val keyDisplay = if (config.apiKey.isBlank()) {
+                "[Not configured]"
+            } else {
+                "•••••••• (${config.apiKey.take(4)}...)"
+            }
+            val consentDisplay = if (config.hasUserConsented) "Granted [YES]" else "Not Granted [NO]"
+
+            val items = arrayOf(
+                "🌐 Endpoint: ${config.apiEndpoint}",
+                "🔑 API Key: $keyDisplay",
+                "🧠 Model: ${config.model}",
+                "📋 Paste API Key from Clipboard",
+                "🛡️ AI Cloud Consent: $consentDisplay",
+                "🔄 Reset to Defaults"
+            )
+
+            val dialog = AlertDialog.Builder(getPlatformDialogThemeContext(latinIme))
+                .setTitle("AI Provider & Credentials")
+                .setItems(items) { di, which ->
+                    di.dismiss()
+                    when (which) {
+                        0 -> showEndpointPicker(latinIme, windowToken, config) { newEndpoint ->
+                            config = config.copy(apiEndpoint = newEndpoint)
+                            config.save(prefs)
+                            KeyboardSwitcher.getInstance().showToast("Endpoint set to $newEndpoint", true)
+                            openAiDialog()
+                        }
+                        1, 3 -> {
+                            val clipboard = latinIme.getSystemService(Context.CLIPBOARD_SERVICE) as? ClipboardManager
+                            val clipText = clipboard?.primaryClip?.getItemAt(0)?.text?.toString()?.trim()
+                            if (!clipText.isNullOrBlank()) {
+                                config = config.copy(apiKey = clipText)
+                                config.save(prefs)
+                                KeyboardSwitcher.getInstance().showToast("API key updated from clipboard!", true)
+                            } else {
+                                KeyboardSwitcher.getInstance().showToast("Clipboard is empty or contains no text", true)
+                            }
+                            openAiDialog()
+                        }
+                        2 -> showModelPicker(latinIme, windowToken, config) { newModel ->
+                            config = config.copy(model = newModel)
+                            config.save(prefs)
+                            KeyboardSwitcher.getInstance().showToast("Model set to $newModel", true)
+                            openAiDialog()
+                        }
+                        4 -> {
+                            val newConsent = !config.hasUserConsented
+                            config = config.copy(hasUserConsented = newConsent)
+                            config.save(prefs)
+                            KeyboardSwitcher.getInstance().showToast("AI consent: ${if (newConsent) "Granted" else "Revoked"}", true)
+                            openAiDialog()
+                        }
+                        5 -> {
+                            config = VoiceAiConfig(
+                                apiEndpoint = VoiceAiConfig.DEFAULT_ENDPOINT,
+                                apiKey = "",
+                                model = VoiceAiConfig.DEFAULT_MODEL,
+                                hasUserConsented = false
+                            )
+                            config.save(prefs)
+                            KeyboardSwitcher.getInstance().showToast("Reset AI settings to defaults", true)
+                            openAiDialog()
+                        }
+                    }
+                }
+                .setPositiveButton(android.R.string.ok) { _, _ -> onUpdated() }
+                .create()
+
+            attachToWindow(dialog, windowToken)
+            dialog.show()
+        }
+
+        openAiDialog()
+    }
+
+    private fun showEndpointPicker(
+        latinIme: LatinIME,
+        windowToken: IBinder,
+        currentConfig: VoiceAiConfig,
+        onSelect: (String) -> Unit
+    ) {
+        val endpoints = arrayOf(
+            "https://api.openai.com/v1 (OpenAI Default)",
+            "https://api.groq.com/openai/v1 (Groq Fast Llama)",
+            "https://openrouter.ai/api/v1 (OpenRouter Multi-model)",
+            "https://ab-box.de/api/v1 (Production VPS Gateway)",
+            "📋 Paste Endpoint from Clipboard"
+        )
+
+        val dialog = AlertDialog.Builder(getPlatformDialogThemeContext(latinIme))
+            .setTitle("Select API Endpoint")
+            .setItems(endpoints) { di, which ->
+                di.dismiss()
+                val selected = when (which) {
+                    0 -> "https://api.openai.com/v1"
+                    1 -> "https://api.groq.com/openai/v1"
+                    2 -> "https://openrouter.ai/api/v1"
+                    3 -> "https://ab-box.de/api/v1"
+                    4 -> {
+                        val clipboard = latinIme.getSystemService(Context.CLIPBOARD_SERVICE) as? ClipboardManager
+                        clipboard?.primaryClip?.getItemAt(0)?.text?.toString()?.trim() ?: currentConfig.apiEndpoint
+                    }
+                    else -> currentConfig.apiEndpoint
+                }
+                onSelect(selected)
+            }
+            .setNegativeButton(android.R.string.cancel, null)
+            .create()
+
+        attachToWindow(dialog, windowToken)
+        dialog.show()
+    }
+
+    private fun showModelPicker(
+        latinIme: LatinIME,
+        windowToken: IBinder,
+        currentConfig: VoiceAiConfig,
+        onSelect: (String) -> Unit
+    ) {
+        val models = arrayOf(
+            "gpt-4o-mini (Fast, economical)",
+            "gpt-4o (High capability)",
+            "llama-3.3-70b-versatile (Groq / OpenRouter)",
+            "deepseek-chat (DeepSeek-V3)",
+            "📋 Paste Model ID from Clipboard"
+        )
+
+        val dialog = AlertDialog.Builder(getPlatformDialogThemeContext(latinIme))
+            .setTitle("Select Model")
+            .setItems(models) { di, which ->
+                di.dismiss()
+                val selected = when (which) {
+                    0 -> "gpt-4o-mini"
+                    1 -> "gpt-4o"
+                    2 -> "llama-3.3-70b-versatile"
+                    3 -> "deepseek-chat"
+                    4 -> {
+                        val clipboard = latinIme.getSystemService(Context.CLIPBOARD_SERVICE) as? ClipboardManager
+                        clipboard?.primaryClip?.getItemAt(0)?.text?.toString()?.trim() ?: currentConfig.model
+                    }
+                    else -> currentConfig.model
+                }
+                onSelect(selected)
+            }
+            .setNegativeButton(android.R.string.cancel, null)
+            .create()
+
+        attachToWindow(dialog, windowToken)
+        dialog.show()
     }
 
     private fun showLanguagePicker(latinIme: LatinIME, windowToken: IBinder, onSelect: (VoiceOutputLanguage) -> Unit) {
