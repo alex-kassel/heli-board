@@ -17,6 +17,7 @@ import org.junit.Before
 import org.junit.runner.RunWith
 import org.robolectric.RobolectricTestRunner
 import org.robolectric.annotation.Config
+import org.robolectric.shadows.ShadowLooper
 import kotlin.test.Test
 import kotlin.test.assertEquals
 import kotlin.test.assertFalse
@@ -129,6 +130,7 @@ class VoiceAiProcessingTest {
             onSuccess = {},
             onError = { errorResult = it }
         )
+        ShadowLooper.idleMainLooper()
 
         assertEquals("AI processing consent has not been granted.", errorResult)
     }
@@ -148,6 +150,7 @@ class VoiceAiProcessingTest {
             onSuccess = {},
             onError = { errorResult = it }
         )
+        ShadowLooper.idleMainLooper()
 
         assertEquals("API key is not configured. Please set it in Voice Settings.", errorResult)
     }

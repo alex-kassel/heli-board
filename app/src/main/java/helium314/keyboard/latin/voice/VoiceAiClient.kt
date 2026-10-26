@@ -143,11 +143,19 @@ class OpenAiCompatibleAiClient : VoiceAiClient {
     }
 
     private fun dispatchSuccess(onSuccess: (String) -> Unit, result: String) {
-        mainHandler.post { onSuccess(result) }
+        if (Looper.myLooper() == Looper.getMainLooper()) {
+            onSuccess(result)
+        } else {
+            mainHandler.post { onSuccess(result) }
+        }
     }
 
     private fun dispatchError(onError: (String) -> Unit, error: String) {
-        mainHandler.post { onError(error) }
+        if (Looper.myLooper() == Looper.getMainLooper()) {
+            onError(error)
+        } else {
+            mainHandler.post { onError(error) }
+        }
     }
 
     companion object {
