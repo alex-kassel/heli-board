@@ -40,12 +40,11 @@ class ClipboardRetentionTest {
 
         clipboardDao.clearOldClips(now = true)
 
-        assertEquals(20, clipboardDao.count())
+        val allClips = clipboardDao.getAll()
+        assertEquals(20, allClips.size)
         // Items 6 through 25 should remain (the 20 most recent), items 1 to 5 should be pruned
         for (i in 6..25) {
-            val exists = (0 until clipboardDao.count()).any { idx ->
-                clipboardDao.getHistoryEntry(idx)?.text == "Clip item #$i"
-            }
+            val exists = allClips.any { it.text == "Clip item #$i" }
             assertTrue(exists, "Expected Clip item #$i to be retained")
         }
     }
@@ -65,13 +64,11 @@ class ClipboardRetentionTest {
         clipboardDao.clearOldClips(now = true)
 
         // 5 pinned + 20 unpinned = 25 clips
-        assertEquals(25, clipboardDao.count())
+        val allClips = clipboardDao.getAll()
+        assertEquals(25, allClips.size)
 
         for (i in 1..5) {
-            val exists = (0 until clipboardDao.count()).any { idx ->
-                val entry = clipboardDao.getHistoryEntry(idx)
-                entry?.text == "Pinned #$i" && entry.isPinned
-            }
+            val exists = allClips.any { it.text == "Pinned #$i" && it.isPinned }
             assertTrue(exists, "Expected Pinned #$i to be preserved")
         }
     }
