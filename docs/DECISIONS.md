@@ -19,7 +19,7 @@ Status: accepted.
 6. Zero typing or clipboard data exfiltration; sensitive/password fields strictly protected.
 
 ## D-005 — Clipboard retention
-Status: proposed. Target 20 recent items plus pinned, after inspection of current implementation.
+Status: accepted. Retain up to 20 recent unpinned clipboard items plus all user-pinned items. Older unpinned items beyond 20 are automatically pruned in `ClipboardDao.clearOldClips()`.
 
 ## D-006 — Microphone button placement
 Status: accepted. Place the microphone button on the far right (top-right) of the keyboard toolbar, aligned with Gboard ergonomics for natural right-hand thumb access.

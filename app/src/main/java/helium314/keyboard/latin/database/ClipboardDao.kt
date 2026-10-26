@@ -195,10 +195,18 @@ class ClipboardDao private constructor(private val db: Database) {
 
         lastClearOldClips = SystemClock.elapsedRealtime()
         val retentionTime = Settings.getValues()?.mClipboardHistoryRetentionTime ?: 121L
-        if (retentionTime > 120) return
-        val minTime = System.currentTimeMillis() - retentionTime * 60 * 1000L
-        val toRemove = cache.filter { it.timeStamp < minTime && !it.isPinned }
-        delete(toRemove)
+        if (retentionTime <= 120) {
+            val minTime = System.currentTimeMillis() - retentionTime * 60 * 1000L
+            val timeBased = cache.filter { it.timeStamp < minTime && !it.isPinned }
+            delete(timeBased)
+        }
+
+        // Decision D-005: Limit unpinned clipboard history to 20 most recent items
+        val unpinned = cache.filter { !it.isPinned }
+        if (unpinned.size > MAX_RECENT_UNPINNED_CLIPS) {
+            val overflow = unpinned.drop(MAX_RECENT_UNPINNED_CLIPS)
+            delete(overflow)
+        }
     }
 
     fun clearNonPinned() {
@@ -247,6 +255,7 @@ class ClipboardDao private constructor(private val db: Database) {
 
     companion object {
         private const val TAG = "ClipboardDao"
+        const val MAX_RECENT_UNPINNED_CLIPS = 20
 
         private const val TABLE = "CLIPBOARD"
         // it's possible timestamp is not unique, so we use a separate ID
